@@ -14,6 +14,7 @@ $description = '';
 $price = '';
 $existingImage = null;
 
+// Get service details when editing
 if ($editing) {
     $stmt = $conn->prepare(
         'SELECT * FROM services WHERE id = ?'
@@ -28,10 +29,10 @@ if ($editing) {
         exit('Servis tidak ditemui.');
     }
 
+    // Only admin or service owner can edit
     if (
         !is_admin() &&
-        (int) $current['user_id'] !==
-        (int) $_SESSION['user_id']
+        (int)$current['user_id'] !== (int)$_SESSION['user_id']
     ) {
         http_response_code(403);
         exit('Anda tidak dibenarkan mengubah servis ini.');
@@ -43,17 +44,21 @@ if ($editing) {
     $existingImage = $current['image'];
 }
 
+// Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
     require_csrf();
 
     $title = trim($_POST['title'] ?? '');
     $description = trim($_POST['description'] ?? '');
     $price = trim($_POST['price'] ?? '');
 
+    // Validate title
     if ($title === '' || mb_strlen($title) > 150) {
         $errors[] = 'Tajuk wajib diisi, maksimum 150 aksara.';
     }
 
+    // Validate description
     if (
         $description === '' ||
         mb_strlen($description) > 5000
@@ -61,20 +66,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Penerangan wajib diisi, maksimum 5000 aksara.';
     }
 
+    // Validate price
     if (
         !is_numeric($price) ||
-        (float) $price < 0 ||
-        (float) $price > 99999999
+        (float)$price < 0 ||
+        (float)$price > 99999999
     ) {
         $errors[] = 'Masukkan harga yang sah.';
     }
 
     $imageName = $existingImage;
+    $newImagePath = null;
 
-    $hasUpload =
+    $hasUpload = (
         isset($_FILES['image']) &&
-        $_FILES['image']['error'] !== UPLOAD_ERR_NO_FILE;
+        $_FILES['image']['error'] !== UPLOAD_ERR_NO_FILE
+    );
 
+    // Image required when adding a new service
     if (!$editing && !$hasUpload) {
         $errors[] = 'Gambar servis diperlukan.';
     }
@@ -86,12 +95,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Muat naik gambar gagal.';
     }
 
-    $newImagePath = null;
-
+    // Validate and upload image
     if (
         $hasUpload &&
         $_FILES['image']['error'] === UPLOAD_ERR_OK
     ) {
+
         if ($_FILES['image']['size'] > 2 * 1024 * 1024) {
             $errors[] = 'Saiz maksimum gambar ialah 2 MB.';
         }
@@ -125,98 +134,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $newImagePath
             )) {
                 $errors[] = 'Tidak dapat menyimpan gambar.';
+                $newImagePath = null;
             }
         }
     }
 
+    // Save service to database
     if (!$errors) {
-        
-if ($editing) {
 
-    // Check ownership again before updating.
-    $check = $conn->prepare(
-        'SELECT user_id, image
-         FROM services
-         WHERE id = ?'
-    );
+        if ($editing) {
 
-    $check->bind_param('i', $id);
-    $check->execute();
+            // Recheck ownership before updating
+            $check = $conn->prepare(
+                'SELECT user_id, image
+                 FROM services
+                 WHERE id = ?'
+            );
 
-    $latest = $check->get_result()->fetch_assoc();
+            $check->bind_param('i', $id);
+            $check->execute();
 
-    if (!$latest) {
-        http_response_code(404);
-        exit('Servis tidak ditemui.');
-    }
+            $latest = $check->get_result()->fetch_assoc();
 
-    if (
-        !is_admin() &&
-        (int) $latest['user_id'] !==
-        (int) $_SESSION['user_id']
-    ) {
-        http_response_code(403);
-        exit('Anda tidak dibenarkan mengubah servis ini.');
-    }
+            if (!$latest) {
+                http_response_code(404);
+                exit('Servis tidak ditemui.');
+            }
 
-    // Use the latest image from the database.
-    $oldImage = $latest['image'];
+            if (
+                !is_admin() &&
+                (int)$latest['user_id'] !== (int)$_SESSION['user_id']
+            ) {
+                http_response_code(403);
+                exit('Anda tidak dibenarkan mengubah servis ini.');
+            }
 
-    $stmt = $conn->prepare(
-        'UPDATE services
-         SET title = ?, description = ?,
-             price = ?, image = ?
-         WHERE id = ?'
-    );
+            $oldImage = $latest['image'];
 
-    $stmt->bind_param(
-        'ssdsi',
-        $title,
-        $description,
-        $price,
-        $imageName,
-        $id
-    );
-
-    $stmt->execute();
-
-    // Remove the old image only after a successful update.
-    if (
-        $newImagePath &&
-        $oldImage &&
-        is_file(
-            __DIR__ . '/uploads/' .
-            basename($oldImage)
-        )
-    ) {
-        unlink(
-            __DIR__ . '/uploads/' .
-            basename($oldImage)
-        );
-    }
-
-} else {
-
-    $uid = (int) $_SESSION['user_id'];
-
-    $stmt = $conn->prepare(
-        'INSERT INTO services
-            (user_id, title, description, price, image)
-         VALUES (?, ?, ?, ?, ?)'
-    );
-
-    $stmt->bind_param(
-        'issds',
-        $uid,
-        $title,
-        $description,
-        $price,
-        $imageName
-    );
-
-    $stmt->execute();
-}
-
+            $stmt = $conn->prepare(
+                'UPDATE services
+                 SET title = ?, description = ?,
+                     price = ?, image = ?
+                 WHERE id = ?'
+            );
 
             $stmt->bind_param(
                 'ssdsi',
@@ -229,23 +189,27 @@ if ($editing) {
 
             $stmt->execute();
 
+            // Delete previous image if replaced
             if (
                 $newImagePath &&
-                $existingImage &&
-                is_file(__DIR__ . '/uploads/' . basename($existingImage))
+                $oldImage &&
+                is_file(
+                    __DIR__ . '/uploads/' . basename($oldImage)
+                )
             ) {
-                @unlink(
-                    __DIR__ . '/uploads/' . basename($existingImage)
+                unlink(
+                    __DIR__ . '/uploads/' . basename($oldImage)
                 );
             }
 
         } else {
 
-            $uid = (int) $_SESSION['user_id'];
+            // Add new service
+            $uid = (int)$_SESSION['user_id'];
 
             $stmt = $conn->prepare(
                 'INSERT INTO services
-                    (user_id, title, description, price, image)
+                 (user_id, title, description, price, image)
                  VALUES (?, ?, ?, ?, ?)'
             );
 
@@ -261,6 +225,7 @@ if ($editing) {
             $stmt->execute();
         }
 
+        // Redirect after successful save
         header(
             'Location: dashboard.php?msg=' .
             urlencode(
@@ -272,9 +237,9 @@ if ($editing) {
         exit;
     }
 
-   
+    // Remove uploaded file if validation fails
     if ($newImagePath && is_file($newImagePath)) {
-        @unlink($newImagePath);
+        unlink($newImagePath);
     }
 }
 
@@ -285,10 +250,13 @@ require 'includes/header.php';
 
 <div class="row justify-content-center">
     <div class="col-lg-8">
+
         <div class="form-card p-4 p-md-5">
 
             <h1 class="h2 fw-bold">
-                <?= $editing ? 'Edit servis' : 'Tambah servis baharu' ?>
+                <?= $editing
+                    ? 'Edit servis'
+                    : 'Tambah servis baharu' ?>
             </h1>
 
             <p class="muted">
@@ -312,6 +280,7 @@ require 'includes/header.php';
                        name="csrf_token"
                        value="<?= e($_SESSION['csrf_token']) ?>">
 
+                <!-- Service title -->
                 <div class="mb-3">
                     <label class="form-label" for="title">
                         Tajuk servis
@@ -325,6 +294,7 @@ require 'includes/header.php';
                            value="<?= e($title) ?>">
                 </div>
 
+                <!-- Description -->
                 <div class="mb-3">
                     <label class="form-label" for="description">
                         Penerangan
@@ -338,6 +308,7 @@ require 'includes/header.php';
                               required><?= e($description) ?></textarea>
                 </div>
 
+                <!-- Price -->
                 <div class="mb-3">
                     <label class="form-label" for="price">
                         Harga (RM)
@@ -354,6 +325,7 @@ require 'includes/header.php';
                            value="<?= e($price) ?>">
                 </div>
 
+                <!-- Image upload -->
                 <div class="mb-4">
                     <label class="form-label" for="image">
                         Gambar servis
@@ -369,27 +341,35 @@ require 'includes/header.php';
 
                     <div class="form-text">
                         JPG atau PNG sahaja, maksimum 2 MB.
-                        <?= $editing ? 'Pilih fail hanya jika mahu tukar gambar.' : '' ?>
+                        <?= $editing
+                            ? 'Pilih fail hanya jika mahu tukar gambar.'
+                            : '' ?>
                     </div>
 
                     <div class="file-feedback small mt-1"></div>
 
-                    <?php
-                    if (
+                    <?php if (
                         $existingImage &&
-                        is_file(__DIR__ . '/uploads/' . basename($existingImage))
-                    ):
-                    ?>
+                        is_file(
+                            __DIR__ . '/uploads/' .
+                            basename($existingImage)
+                        )
+                    ): ?>
+
                         <img
                             class="mt-3 rounded"
                             style="max-width:180px"
                             src="uploads/<?= e(basename($existingImage)) ?>"
                             alt="Gambar semasa">
+
                     <?php endif; ?>
                 </div>
 
-                <button class="btn btn-primary">
-                    <?= $editing ? 'Simpan perubahan' : 'Simpan servis' ?>
+                <!-- Buttons -->
+                <button type="submit" class="btn btn-primary">
+                    <?= $editing
+                        ? 'Simpan perubahan'
+                        : 'Simpan servis' ?>
                 </button>
 
                 <a class="btn btn-outline-secondary"
